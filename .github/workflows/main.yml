@@ -1,70 +1,81 @@
-name: Android Emulator with noVNC + LocalTunnel
+name: Android Emulator with noVNC and LocalTunnel
 
-on:
-  workflow_dispatch:
+on: [push]
 
 jobs:
   android-emulator:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+      DISPLAY: :1
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Cache Android SDK
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.ANDROID_SDK_ROOT }}
+          key: android-sdk-linux-28
+          restore-keys: android-sdk-linux-
+
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y openjdk-11-jdk wget unzip xvfb x11vnc python3-pip
-          sudo pip3 install websockify
-          # Установка Node.js (используем NodeSource)
-          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-          sudo apt-get install -y nodejs
-          
-      - name: Install LocalTunnel globally
-        run: npm install -g localtunnel
+          sudo apt-get install -y wget unzip qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils socat xvfb x11vnc novnc
 
-      - name: Setup Android SDK
+      - name: Setup Android SDK command line tools
         run: |
-          mkdir -p $HOME/android-sdk
-          cd $HOME
+          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+          cd $ANDROID_SDK_ROOT
           wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
-          unzip cmdline-tools.zip -d android-sdk
-          mkdir -p android-sdk/cmdline-tools/latest
-          mv android-sdk/cmdline-tools/* android-sdk/cmdline-tools/latest/
-          export ANDROID_SDK_ROOT=$HOME/android-sdk
-          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator
+          unzip -q cmdline-tools.zip
+          mv cmdline-tools cmdline-tools/latest
+          rm cmdline-tools.zip
+          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
 
+      - name: Install Android SDK components
+        run: |
+          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
           yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses
           sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "platforms;android-28" "system-images;android-28;google_apis;x86" "emulator"
 
-      - name: Create and start Android emulator
+      - name: Create Android AVD
         run: |
-          export ANDROID_SDK_ROOT=$HOME/android-sdk
-          export PATH=$PATH:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/platform-tools
-          echo "no" | avdmanager create avd -n testAVD -k "system-images;android-28;google_apis;x86" --force --device "pixel"
-          
-          # Start X virtual framebuffer
-          Xvfb :1 -screen 0 1280x720x16 &
-          export DISPLAY=:1
-          
-          # Start emulator headless with no audio and GPU off
-          emulator -avd testAVD -no-window -no-audio -gpu swiftshader_indirect -verbose &
-          EMULATOR_PID=$!
+          echo "no" | avdmanager create avd -n testavd -k "system-images;android-28;google_apis;x86" --force
 
-          # Wait for emulator to boot
-          bootanim=""
+      - name: Start Xvfb
+        run: |
+          Xvfb :1 -screen 0 1280x720x24 &
+
+      - name: Start Android emulator and VNC server
+        run: |
+          nohup $ANDROID_SDK_ROOT/emulator/emulator -avd testavd -no-audio -no-boot-anim -no-window -gpu swiftshader_indirect -verbose -no-snapshot &
+
+          # Ждём загрузки эмулятора
           timeout=0
-          until [[ "$bootanim" == "stopped" || $timeout -ge 120 ]]; do
+          booted=false
+          while [ $timeout -lt 300 ]; do
+            if $ANDROID_SDK_ROOT/platform-tools/adb -e shell getprop sys.boot_completed | grep -q "1"; then
+              booted=true
+              break
+            fi
             sleep 5
-            bootanim=$(adb -e shell getprop init.svc.bootanim 2>/dev/null)
             timeout=$((timeout + 5))
           done
 
-          # Start VNC server on DISPLAY :1, listen on port 5901
-          x11vnc -display :1 -nopw -forever -shared -rfbport 5901 &
+          if [ "$booted" = false ]; then
+            echo "Эмулятор не загрузился за 5 минут"
+            exit 1
+          fi
 
-          # Start noVNC to proxy VNC to WebSocket on port 6080
-          websockify --web=/usr/share/novnc 6080 localhost:5901 &
+          # Запуск x11vnc для отображения дисплея Xvfb
+          nohup x11vnc -display :1 -nopw -forever -shared -rfbport 6080 &
 
-          echo "Emulator and noVNC server started."
+      - name: Install LocalTunnel
+        run: npm install -g localtunnel
 
-      - name: Start LocalTunnel and save public URL
+      - name: Start LocalTunnel and output public URL
         id: lt
         run: |
           lt --port 6080 --print-requests --subdomain my-unique-subdomain-$(date +%s) > lt.log 2>&1 &
@@ -72,9 +83,8 @@ jobs:
           cat lt.log
           URL=$(grep -o "https://[a-z0-9.-]*.loca.lt" lt.log | head -1)
           echo "PUBLIC_URL=$URL" >> $GITHUB_ENV
+          echo "Tunnel running for 2 hours..."
+          sleep 7200
 
       - name: Show access URL
         run: echo "Open noVNC at $PUBLIC_URL/vnc.html"
-
-      - name: Keep job alive for 2 hours
-        run: sleep 7200
