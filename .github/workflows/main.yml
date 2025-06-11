@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget unzip qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils socat xvfb x11vnc novnc npm
+          sudo apt-get install -y wget unzip qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils socat xvfb x11vnc novnc nodejs npm
 
       - name: Setup Android SDK command line tools
         run: |
@@ -32,26 +32,30 @@ jobs:
           unzip -q cmdline-tools.zip
           mv cmdline-tools cmdline-tools/latest
           rm cmdline-tools.zip
-          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
+
+      - name: Add SDK tools to PATH
+        run: echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
       - name: Install Android SDK components
         run: |
-          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
           yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses
           sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "platforms;android-28" "system-images;android-28;google_apis;x86" "emulator"
 
       - name: Create Android AVD
-        run: |
-          echo "no" | avdmanager create avd -n testavd -k "system-images;android-28;google_apis;x86" --force
+        run: echo "no" | avdmanager create avd -n testavd -k "system-images;android-28;google_apis;x86" --force
 
       - name: Start Xvfb
         run: |
           Xvfb :1 -screen 0 1280x720x24 &
+          sleep 3
 
-      - name: Start Android emulator and VNC server
+      - name: Start Android emulator
         run: |
-          nohup $ANDROID_SDK_ROOT/emulator/emulator -avd testavd -no-audio -no-boot-anim -no-window -gpu swiftshader_indirect -verbose -no-snapshot &
+          nohup $ANDROID_SDK_ROOT/emulator/emulator -avd testavd -no-audio -no-boot-anim -no-window -gpu swiftshader_indirect -verbose -no-snapshot > emulator.log 2>&1 &
+          sleep 10
 
+      - name: Wait for emulator to boot
+        run: |
           timeout=0
           booted=false
           while [ $timeout -lt 300 ]; do
@@ -59,16 +63,20 @@ jobs:
               booted=true
               break
             fi
+            echo "Waiting for emulator to boot... $timeout seconds elapsed"
             sleep 5
             timeout=$((timeout + 5))
           done
 
           if [ "$booted" = false ]; then
             echo "Emulator did not boot within 5 minutes"
+            cat emulator.log
             exit 1
           fi
 
-          nohup x11vnc -display :1 -nopw -forever -shared -rfbport 6080 &
+      - name: Start x11vnc server
+        run: |
+          nohup x11vnc -display :1 -nopw -forever -shared -rfbport 6080 > x11vnc.log 2>&1 &
 
       - name: Install LocalTunnel
         run: npm install -g localtunnel
