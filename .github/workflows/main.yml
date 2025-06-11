@@ -1,92 +1,38 @@
-name: Android Emulator with noVNC and LocalTunnel
+name: Android in Browser
 
-on: [push]
+on: [workflow_dispatch]
 
 jobs:
-  android-emulator:
+  run-android:
     runs-on: ubuntu-latest
-    env:
-      ANDROID_SDK_ROOT: /tmp/android-sdk
-      DISPLAY: :1
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Install dependencies
+      - name: Install localtunnel
         run: |
-          sudo apt-get update
-          sudo apt-get install -y wget unzip qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils socat xvfb x11vnc novnc nodejs npm
+          sudo apt update
+          sudo apt install -y nodejs npm
+          npm install -g localtunnel
 
-      - name: Setup Android SDK command line tools
+      - name: Run Android emulator in Docker
         run: |
-          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
-          cd $ANDROID_SDK_ROOT
-          wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
-          unzip -q cmdline-tools.zip
-          mv cmdline-tools cmdline-tools/latest
-          rm cmdline-tools.zip
+          docker run -d --name android \
+            -p 6080:6080 \
+            -e DEVICE="pixel" \
+            -e EMULATOR_ARGS="-no-window -noaudio -gpu swiftshader_indirect" \
+            budtmo/docker-android-x86-8.1
 
-      - name: Add SDK tools to PATH
-        run: echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+      - name: Wait for Android to start
+        run: sleep 60
 
-      - name: Install Android SDK components
+      - name: Start LocalTunnel
         run: |
-          yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses
-          sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "platforms;android-28" "system-images;android-28;google_apis;x86" "emulator"
-
-      - name: Create Android AVD
-        run: echo "no" | avdmanager create avd -n testavd -k "system-images;android-28;google_apis;x86" --force
-
-      - name: Start Xvfb
-        run: |
-          Xvfb :1 -screen 0 1280x720x24 &
-          sleep 3
-
-      - name: Start Android emulator
-        run: |
-          nohup $ANDROID_SDK_ROOT/emulator/emulator -avd testavd -no-audio -no-boot-anim -no-window -gpu swiftshader_indirect -verbose -no-snapshot > emulator.log 2>&1 &
-          sleep 10
-
-      - name: Wait for emulator to boot
-        run: |
-          timeout=0
-          booted=false
-          while [ $timeout -lt 300 ]; do
-            if $ANDROID_SDK_ROOT/platform-tools/adb -e shell getprop sys.boot_completed | grep -q "1"; then
-              booted=true
-              break
-            fi
-            echo "Waiting for emulator to boot... $timeout seconds elapsed"
-            sleep 5
-            timeout=$((timeout + 5))
-          done
-
-          if [ "$booted" = false ]; then
-            echo "Emulator did not boot within 5 minutes"
-            cat emulator.log
-            exit 1
-          fi
-
-      - name: Start x11vnc server
-        run: |
-          nohup x11vnc -display :1 -nopw -forever -shared -rfbport 6080 > x11vnc.log 2>&1 &
-
-      - name: Install LocalTunnel
-        run: npm install -g localtunnel
-
-      - name: Start LocalTunnel and output public URL
-        id: lt
-        run: |
-          lt --port 6080 --print-requests --subdomain my-unique-subdomain-$(date +%s) > lt.log 2>&1 &
+          lt --port 6080 --subdomain androidbox-$(date +%s) > lt.log 2>&1 &
           sleep 5
           cat lt.log
-          URL=$(grep -o "https://[a-z0-9.-]*.loca.lt" lt.log | head -1)
-          echo "PUBLIC_URL=$URL" >> $GITHUB_ENV
+          echo "URL=$(grep -o 'https://[a-z0-9.-]*.loca.lt' lt.log | head -1)" >> $GITHUB_ENV
 
-      - name: Show access URL
-        run: echo "Open noVNC at $PUBLIC_URL/vnc.html"
+      - name: Show access link
+        run: echo "🔗 Open Android in browser: $URL"
 
-      - name: Keep tunnel alive for 2 hours
-        run: |
-          echo "Tunnel running for 2 hours..."
-          sleep 7200
+      - name: Keep alive
+        run: sleep 7200
