@@ -1,0 +1,80 @@
+name: Android Emulator with noVNC + LocalTunnel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  android-emulator:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openjdk-11-jdk wget unzip xvfb x11vnc python3-pip
+          sudo pip3 install websockify
+          # Установка Node.js (используем NodeSource)
+          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+          sudo apt-get install -y nodejs
+          
+      - name: Install LocalTunnel globally
+        run: npm install -g localtunnel
+
+      - name: Setup Android SDK
+        run: |
+          mkdir -p $HOME/android-sdk
+          cd $HOME
+          wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
+          unzip cmdline-tools.zip -d android-sdk
+          mkdir -p android-sdk/cmdline-tools/latest
+          mv android-sdk/cmdline-tools/* android-sdk/cmdline-tools/latest/
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator
+
+          yes | sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses
+          sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "platforms;android-28" "system-images;android-28;google_apis;x86" "emulator"
+
+      - name: Create and start Android emulator
+        run: |
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          export PATH=$PATH:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/platform-tools
+          echo "no" | avdmanager create avd -n testAVD -k "system-images;android-28;google_apis;x86" --force --device "pixel"
+          
+          # Start X virtual framebuffer
+          Xvfb :1 -screen 0 1280x720x16 &
+          export DISPLAY=:1
+          
+          # Start emulator headless with no audio and GPU off
+          emulator -avd testAVD -no-window -no-audio -gpu swiftshader_indirect -verbose &
+          EMULATOR_PID=$!
+
+          # Wait for emulator to boot
+          bootanim=""
+          timeout=0
+          until [[ "$bootanim" == "stopped" || $timeout -ge 120 ]]; do
+            sleep 5
+            bootanim=$(adb -e shell getprop init.svc.bootanim 2>/dev/null)
+            timeout=$((timeout + 5))
+          done
+
+          # Start VNC server on DISPLAY :1, listen on port 5901
+          x11vnc -display :1 -nopw -forever -shared -rfbport 5901 &
+
+          # Start noVNC to proxy VNC to WebSocket on port 6080
+          websockify --web=/usr/share/novnc 6080 localhost:5901 &
+
+          echo "Emulator and noVNC server started."
+
+      - name: Start LocalTunnel and save public URL
+        id: lt
+        run: |
+          lt --port 6080 --print-requests --subdomain my-unique-subdomain-$(date +%s) > lt.log 2>&1 &
+          sleep 5
+          cat lt.log
+          URL=$(grep -o "https://[a-z0-9.-]*.loca.lt" lt.log | head -1)
+          echo "PUBLIC_URL=$URL" >> $GITHUB_ENV
+
+      - name: Show access URL
+        run: echo "Open noVNC at $PUBLIC_URL/vnc.html"
+
+      - name: Keep job alive for 2 hours
+        run: sleep 7200
