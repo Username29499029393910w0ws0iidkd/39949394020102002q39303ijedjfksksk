@@ -1,38 +1,39 @@
-name: Android in Browser
+name: Android Emulator in Browser
 
 on: [workflow_dispatch]
 
 jobs:
-  run-android:
+  android:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install localtunnel
+      - name: Install LocalTunnel
         run: |
           sudo apt update
           sudo apt install -y nodejs npm
           npm install -g localtunnel
 
-      - name: Run Android emulator in Docker
+      - name: Pull Android Docker image
+        run: docker pull budtmo/docker-android-x86-8.1
+
+      - name: Run Android container
         run: |
           docker run -d --name android \
             -p 6080:6080 \
             -e DEVICE="pixel" \
             -e EMULATOR_ARGS="-no-window -noaudio -gpu swiftshader_indirect" \
             budtmo/docker-android-x86-8.1
-
-      - name: Wait for Android to start
-        run: sleep 60
+          sleep 60
 
       - name: Start LocalTunnel
         run: |
-          lt --port 6080 --subdomain androidbox-$(date +%s) > lt.log 2>&1 &
+          lt --port 6080 --subdomain androiddemo-$(date +%s) > lt.log 2>&1 &
           sleep 5
           cat lt.log
-          echo "URL=$(grep -o 'https://[a-z0-9.-]*.loca.lt' lt.log | head -1)" >> $GITHUB_ENV
+          echo "PUBLIC_URL=$(grep -o 'https://[a-z0-9.-]*.loca.lt' lt.log | head -1)" >> $GITHUB_ENV
 
-      - name: Show access link
-        run: echo "🔗 Open Android in browser: $URL"
+      - name: Show Access URL
+        run: echo "🟢 Android в браузере: $PUBLIC_URL/vnc.html"
 
-      - name: Keep alive
+      - name: Keep alive for 2 hours
         run: sleep 7200
