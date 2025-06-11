@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget unzip qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils socat xvfb x11vnc novnc
+          sudo apt-get install -y wget unzip qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils socat xvfb x11vnc novnc npm
 
       - name: Setup Android SDK command line tools
         run: |
@@ -52,7 +52,6 @@ jobs:
         run: |
           nohup $ANDROID_SDK_ROOT/emulator/emulator -avd testavd -no-audio -no-boot-anim -no-window -gpu swiftshader_indirect -verbose -no-snapshot &
 
-          # Ждём загрузки эмулятора
           timeout=0
           booted=false
           while [ $timeout -lt 300 ]; do
@@ -65,11 +64,10 @@ jobs:
           done
 
           if [ "$booted" = false ]; then
-            echo "Эмулятор не загрузился за 5 минут"
+            echo "Emulator did not boot within 5 minutes"
             exit 1
           fi
 
-          # Запуск x11vnc для отображения дисплея Xvfb
           nohup x11vnc -display :1 -nopw -forever -shared -rfbport 6080 &
 
       - name: Install LocalTunnel
@@ -83,8 +81,11 @@ jobs:
           cat lt.log
           URL=$(grep -o "https://[a-z0-9.-]*.loca.lt" lt.log | head -1)
           echo "PUBLIC_URL=$URL" >> $GITHUB_ENV
-          echo "Tunnel running for 2 hours..."
-          sleep 7200
 
       - name: Show access URL
         run: echo "Open noVNC at $PUBLIC_URL/vnc.html"
+
+      - name: Keep tunnel alive for 2 hours
+        run: |
+          echo "Tunnel running for 2 hours..."
+          sleep 7200
