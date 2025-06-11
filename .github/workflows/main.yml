@@ -6,18 +6,11 @@ jobs:
   android-emulator:
     runs-on: ubuntu-latest
     env:
-      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+      ANDROID_SDK_ROOT: /tmp/android-sdk
       DISPLAY: :1
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
-      - name: Cache Android SDK
-        uses: actions/cache@v3
-        with:
-          path: ${{ env.ANDROID_SDK_ROOT }}
-          key: android-sdk-linux-28
-          restore-keys: android-sdk-linux-
 
       - name: Install dependencies
         run: |
